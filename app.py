@@ -4,8 +4,9 @@ import uvicorn, json, os, hashlib, time, secrets
 from datetime import datetime
 from huggingface_hub import InferenceClient
 
-MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
-client   = InferenceClient(model=MODEL_ID)
+MODEL_ID  = "Qwen/Qwen2.5-72B-Instruct"
+HF_TOKEN  = os.environ.get("HF_TOKEN")          # set in HF Space → Settings → Secrets
+client    = InferenceClient(model=MODEL_ID, token=HF_TOKEN)
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
