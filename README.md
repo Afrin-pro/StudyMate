@@ -1,3 +1,13 @@
+---
+title: StudyMate
+emoji: 📚
+colorFrom: purple
+colorTo: pink
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
 # 📚 StudyMate — AI Study Assistant
 
 > Intelligent study chatbot powered by **Qwen2.5-72B-Instruct** · Built with **FastAPI** · Deployed on **Hugging Face Spaces** (Docker)
@@ -325,9 +335,8 @@ emoji: 📚
 colorFrom: purple
 colorTo: violet
 sdk: docker
-app_port: 7860
+app_file: app.py
 pinned: false
-license: mit
 ---
 ```
 
