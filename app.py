@@ -17,11 +17,10 @@ try:
 except ImportError:
     HAS_PIL = False
 
-TEXT_MODEL    = "Qwen/Qwen2.5-72B-Instruct"
-VISION_MODEL  = "Qwen/Qwen2-VL-7B-Instruct"
-HF_TOKEN      = os.environ.get("HF_TOKEN")
-text_client   = InferenceClient(model=TEXT_MODEL,   token=HF_TOKEN)
-vision_client = InferenceClient(model=VISION_MODEL, token=HF_TOKEN)
+TEXT_MODEL  = "Qwen/Qwen2.5-72B-Instruct"
+HF_TOKEN    = os.environ.get("HF_TOKEN")
+GEMINI_KEY  = os.environ.get("GEMINI_API_KEY")
+text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
@@ -706,9 +705,39 @@ async def api_chat(request: Request):
     # ── Call model ──────────────────────────────────────────────────────────
     try:
         use_vision = file and file.get("mime","").startswith("image/")
-        active_client = vision_client if use_vision else text_client
-        r     = active_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
-        reply = r.choices[0].message.content.strip()
+        if use_vision:
+            # Use Gemini Flash — free, natively multimodal, no HF provider needed
+            import urllib.request
+            gemini_url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+            )
+            last_user = messages[-1]["content"]  # list of {type, ...} parts
+            gemini_parts = []
+            for part in last_user:
+                if part["type"] == "text":
+                    gemini_parts.append({"text": part["text"]})
+                elif part["type"] == "image_url":
+                    data_url = part["image_url"]["url"]
+                    header, b64data = data_url.split(",", 1)
+                    mime_type = header.split(":")[1].split(";")[0]
+                    gemini_parts.append({
+                        "inline_data": {"mime_type": mime_type, "data": b64data}
+                    })
+            gemini_parts = [{"text": SYSTEM_PROMPT}] + gemini_parts
+            payload = json.dumps({
+                "contents": [{"role": "user", "parts": gemini_parts}]
+            }).encode()
+            req = urllib.request.Request(
+                gemini_url, data=payload,
+                headers={"Content-Type": "application/json"}, method="POST"
+            )
+            with urllib.request.urlopen(req) as resp:
+                gdata = json.loads(resp.read())
+            reply = gdata["candidates"][0]["content"]["parts"][0]["text"].strip()
+        else:
+            r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
+            reply = r.choices[0].message.content.strip()
     except Exception as e:
         reply = f"⚠️ Error: {e}"
 
