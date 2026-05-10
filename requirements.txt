@@ -3,3 +3,4 @@ uvicorn==0.30.6
 huggingface_hub>=0.24.0
 python-multipart==0.0.12
 pypdf==4.3.1
+Pillow>=10.0.0
