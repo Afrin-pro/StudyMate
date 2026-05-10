@@ -11,6 +11,12 @@ try:
 except ImportError:
     HAS_PDF = False
 
+try:
+    from PIL import Image as PILImage
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 TEXT_MODEL    = "Qwen/Qwen2.5-72B-Instruct"
 VISION_MODEL  = "Qwen/Qwen2.5-VL-7B-Instruct"
 HF_TOKEN      = os.environ.get("HF_TOKEN")
@@ -28,6 +34,27 @@ SYSTEM_PROMPT = (
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 ALLOWED_DOC_TYPES   = {"application/pdf", "text/plain", "text/markdown"}
 MAX_FILE_MB         = 10
+
+MAX_IMG_PIXELS = 1024  # max dimension in pixels before sending to model
+
+def resize_image_b64(b64: str, mime: str) -> tuple[str, str]:
+    """Resize image to max MAX_IMG_PIXELS on longest side, return new b64 + mime."""
+    if not HAS_PIL:
+        return b64, mime
+    try:
+        raw = base64.b64decode(b64)
+        img = PILImage.open(io.BytesIO(raw)).convert("RGB")
+        w, h = img.size
+        if max(w, h) > MAX_IMG_PIXELS:
+            scale = MAX_IMG_PIXELS / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), PILImage.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        new_b64 = base64.b64encode(buf.getvalue()).decode()
+        return new_b64, "image/jpeg"
+    except Exception:
+        return b64, mime
+
 
 DATA_DIR    = "user_data"
 SESSION_DIR = "sessions"
@@ -111,7 +138,7 @@ def build_messages_with_file(history, user_text, file_info):
             parts.append({"type": "text", "text": user_text})
         parts.append({
             "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{b64}"}
+            "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "auto"}
         })
         msgs.append({"role": "user", "content": parts})
     else:
@@ -645,6 +672,8 @@ async def api_chat(request: Request):
         raw   = base64.b64decode(b64) if b64 else b""
 
         if mime.startswith("image/"):
+            # Resize to avoid payload too large errors
+            b64, mime = resize_image_b64(b64, mime)
             file_info = {"type": "image", "name": fname, "mime": mime, "b64": b64}
         elif mime == "application/pdf":
             text = extract_pdf_text(raw)
