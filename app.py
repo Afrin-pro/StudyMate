@@ -653,6 +653,12 @@ async def api_chat(request: Request):
     u = current_user(request)
     if not u: return JSONResponse({"error": "unauthorized"}, status_code=401)
 
+    # DEBUG — remove after confirming key is present
+    if not GROQ_KEY:
+        return JSONResponse({"reply": "⚠️ DEBUG: GROQ_API_KEY secret is missing or empty"})
+    else:
+        return JSONResponse({"reply": f"⚠️ DEBUG: GROQ_API_KEY found, starts with: {GROQ_KEY[:8]}..."})
+
     body = await request.json()
     sid  = body.get("sid") or str(int(time.time()))
     msg  = body.get("message", "").strip()
