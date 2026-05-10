@@ -707,30 +707,16 @@ async def api_chat(request: Request):
     try:
         use_vision = file and file.get("mime","").startswith("image/")
         if use_vision:
-            # Use Groq — free tier, supports Llama-4 Scout vision, 30 req/min
-            import urllib.request, urllib.error
-            groq_url = "https://api.groq.com/openai/v1/chat/completions"
-            # messages already built with image_url parts by build_messages_with_file
-            payload = json.dumps({
-                "model": VISION_MODEL,
-                "messages": messages,
-                "max_tokens": 1024,
-                "temperature": 0.7,
-            }).encode()
-            req = urllib.request.Request(
-                groq_url, data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {GROQ_KEY}",
-                }, method="POST"
+            # Use Groq SDK — avoids Cloudflare blocks that urllib triggers
+            from groq import Groq as GroqClient
+            groq_client = GroqClient(api_key=GROQ_KEY)
+            r = groq_client.chat.completions.create(
+                model=VISION_MODEL,
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.7,
             )
-            try:
-                with urllib.request.urlopen(req) as resp:
-                    gdata = json.loads(resp.read())
-                reply = gdata["choices"][0]["message"]["content"].strip()
-            except urllib.error.HTTPError as he:
-                body_bytes = he.read()
-                raise RuntimeError(f"Groq HTTP {he.code}: {body_bytes.decode(errors='replace')}")
+            reply = r.choices[0].message.content.strip()
         else:
             r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
             reply = r.choices[0].message.content.strip()
