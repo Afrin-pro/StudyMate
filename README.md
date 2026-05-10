@@ -1,3 +1,13 @@
+---
+license: mit
+title: StudyMate
+sdk: docker
+emoji: 📚
+colorFrom: purple
+colorTo: pink
+app_file: app.py
+pinned: false
+---
 # StudyMate 📚
 
 An intelligent, free, open-source AI study assistant built with FastAPI and deployed on Hugging Face Spaces. Supports text chat, image analysis, and PDF reading — all powered by free-tier AI models.
