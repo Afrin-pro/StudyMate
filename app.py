@@ -11,9 +11,11 @@ try:
 except ImportError:
     HAS_PDF = False
 
-MODEL_ID  = "Qwen/Qwen2.5-72B-Instruct"
-HF_TOKEN  = os.environ.get("HF_TOKEN")
-client    = InferenceClient(model=MODEL_ID, token=HF_TOKEN)
+TEXT_MODEL    = "Qwen/Qwen2.5-72B-Instruct"
+VISION_MODEL  = "Qwen/Qwen2.5-VL-7B-Instruct"
+HF_TOKEN      = os.environ.get("HF_TOKEN")
+text_client   = InferenceClient(model=TEXT_MODEL,   token=HF_TOKEN)
+vision_client = InferenceClient(model=VISION_MODEL, token=HF_TOKEN)
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
@@ -674,7 +676,9 @@ async def api_chat(request: Request):
 
     # ── Call model ──────────────────────────────────────────────────────────
     try:
-        r     = client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
+        use_vision = file and file.get("mime","").startswith("image/")
+        active_client = vision_client if use_vision else text_client
+        r     = active_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
         reply = r.choices[0].message.content.strip()
     except Exception as e:
         reply = f"⚠️ Error: {e}"
