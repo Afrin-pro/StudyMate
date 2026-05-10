@@ -333,7 +333,7 @@ python-multipart==0.0.12
 title: StudyMate
 emoji: 📚
 colorFrom: purple
-colorTo: violet
+colorTo: pink
 sdk: docker
 app_file: app.py
 pinned: false
