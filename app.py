@@ -651,6 +651,9 @@ async def chat_session(request: Request, sid: str):
 @app.post("/api/chat")
 async def api_chat(request: Request):
     u = current_user(request)
+    if not GROQ_KEY:
+    return JSONResponse({"reply": "⚠️ GROQ_API_KEY secret is missing or empty"})
+
     if not u: return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     body = await request.json()
