@@ -653,12 +653,6 @@ async def api_chat(request: Request):
     u = current_user(request)
     if not u: return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    # DEBUG — remove after confirming key is present
-    if not GROQ_KEY:
-        return JSONResponse({"reply": "⚠️ DEBUG: GROQ_API_KEY secret is missing or empty"})
-    else:
-        return JSONResponse({"reply": f"⚠️ DEBUG: GROQ_API_KEY found, starts with: {GROQ_KEY[:8]}..."})
-
     body = await request.json()
     sid  = body.get("sid") or str(int(time.time()))
     msg  = body.get("message", "").strip()
@@ -730,9 +724,13 @@ async def api_chat(request: Request):
                     "Authorization": f"Bearer {GROQ_KEY}",
                 }, method="POST"
             )
-            with urllib.request.urlopen(req) as resp:
-                gdata = json.loads(resp.read())
-            reply = gdata["choices"][0]["message"]["content"].strip()
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    gdata = json.loads(resp.read())
+                reply = gdata["choices"][0]["message"]["content"].strip()
+            except urllib.error.HTTPError as he:
+                body_bytes = he.read()
+                raise RuntimeError(f"Groq HTTP {he.code}: {body_bytes.decode(errors='replace')}")
         else:
             r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
             reply = r.choices[0].message.content.strip()
