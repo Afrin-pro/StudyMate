@@ -707,7 +707,7 @@ async def api_chat(request: Request):
         use_vision = file and file.get("mime","").startswith("image/")
         if use_vision:
             # Use Gemini Flash — free, natively multimodal, no HF provider needed
-            import urllib.request
+            import urllib.request, urllib.error
             gemini_url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
                 f"gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
@@ -728,18 +728,35 @@ async def api_chat(request: Request):
             payload = json.dumps({
                 "contents": [{"role": "user", "parts": gemini_parts}]
             }).encode()
-            req = urllib.request.Request(
-                gemini_url, data=payload,
-                headers={"Content-Type": "application/json"}, method="POST"
-            )
-            with urllib.request.urlopen(req) as resp:
-                gdata = json.loads(resp.read())
-            reply = gdata["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # Retry with exponential backoff for 429 rate limit errors
+            reply = None
+            for attempt in range(4):  # up to ~30s total wait
+                req = urllib.request.Request(
+                    gemini_url, data=payload,
+                    headers={"Content-Type": "application/json"}, method="POST"
+                )
+                try:
+                    with urllib.request.urlopen(req) as resp:
+                        gdata = json.loads(resp.read())
+                    reply = gdata["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    break
+                except urllib.error.HTTPError as he:
+                    if he.code == 429 and attempt < 3:
+                        wait = 5 * (2 ** attempt)  # 5s, 10s, 20s
+                        time.sleep(wait)
+                    else:
+                        raise
+            if reply is None:
+                raise RuntimeError("Gemini rate limit: too many requests. Please try again in a moment.")
         else:
             r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
             reply = r.choices[0].message.content.strip()
     except Exception as e:
-        reply = f"⚠️ Error: {e}"
+        err = str(e)
+        if "429" in err or "rate limit" in err.lower():
+            reply = "⚠️ The image model is busy right now (rate limit). Please wait 15–30 seconds and try again."
+        else:
+            reply = f"⚠️ Error: {e}"
 
     # ── Persist ─────────────────────────────────────────────────────────────
     history = history + [
