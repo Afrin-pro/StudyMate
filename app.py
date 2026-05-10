@@ -18,7 +18,7 @@ except ImportError:
     HAS_PIL = False
 
 TEXT_MODEL    = "Qwen/Qwen2.5-72B-Instruct"
-VISION_MODEL  = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+VISION_MODEL  = "Qwen/Qwen2-VL-7B-Instruct"
 HF_TOKEN      = os.environ.get("HF_TOKEN")
 text_client   = InferenceClient(model=TEXT_MODEL,   token=HF_TOKEN)
 vision_client = InferenceClient(model=VISION_MODEL, token=HF_TOKEN)
