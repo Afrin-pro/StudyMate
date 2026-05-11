@@ -8,7 +8,7 @@
 
 > An intelligent AI study assistant that can read your notes, explain diagrams, and answer exam questions — completely free, no paid APIs required.
 
-**Live demo:** [your-space.hf.space](https://huggingface.co/spaces/Ai-WhizKid/StudyMate) ← replace with your Space URL
+**Live demo:** [studymate.hf.space](https://huggingface.co/spaces/Ai-WhizKid/StudyMate) 
 
 ---
 
