@@ -18,10 +18,15 @@ except ImportError:
     HAS_PIL = False
 
 TEXT_MODEL  = "Qwen/Qwen2.5-72B-Instruct"
-VISION_MODEL = "qwen/qwen3.6-27b"
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 HF_TOKEN    = os.environ.get("HF_TOKEN")
 GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
+
+def strip_think(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks some models leak into output."""
+    import re
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
@@ -716,10 +721,10 @@ async def api_chat(request: Request):
                 max_tokens=1024,
                 temperature=0.7,
             )
-            reply = r.choices[0].message.content.strip()
+            reply = strip_think(r.choices[0].message.content)
         else:
             r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
-            reply = r.choices[0].message.content.strip()
+            reply = strip_think(r.choices[0].message.content)
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower():
