@@ -18,7 +18,7 @@ except ImportError:
     HAS_PIL = False
 
 TEXT_MODEL  = "Qwen/Qwen2.5-72B-Instruct"
-VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+VISION_MODEL = "qwen/qwen3.6-27b"
 HF_TOKEN    = os.environ.get("HF_TOKEN")
 GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
