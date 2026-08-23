@@ -18,10 +18,14 @@ except ImportError:
     HAS_PIL = False
 
 TEXT_MODEL  = "Qwen/Qwen2.5-72B-Instruct"
-VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+VISION_MODEL = "qwen/qwen3.6-27b"
 HF_TOKEN    = os.environ.get("HF_TOKEN")
 GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
+
+def strip_think(text: str) -> str:
+    import re
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
@@ -455,9 +459,15 @@ setInterval(function(){{
   if(d) d.textContent='.'.repeat(n||1);
 }},400);
 
-function esc(s){{
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')
-          .replace(/>/g,'&gt;').replace(/\\n/g,'<br/>');
+function renderMarkdown(s){{
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
+  s = s.replace(/`([^`]+)`/g,'<code style="background:#f3e8ff;padding:1px 5px;border-radius:4px;font-size:.88em;font-family:monospace">$1</code>');
+  s = s.replace(/(^|\n)[\-\*] (.+)/g,'$1\u2022 $2');
+  s = s.replace(/\n/g,'<br/>');
+  return s;
 }}
 
 function bubble(role, text, extraHtml){{
@@ -469,7 +479,7 @@ function bubble(role, text, extraHtml){{
   }}else{{
     i.style.cssText='background:#fff;color:#1e1b4b;border-radius:20px 20px 20px 4px;padding:12px 16px;max-width:72%;font-size:.92rem;line-height:1.5;box-shadow:0 4px 24px rgba(139,92,246,.14);border:1px solid #e9d5ff;';
   }}
-  i.innerHTML = esc(text);
+  i.innerHTML = renderMarkdown(text);
   if (extraHtml) i.innerHTML += extraHtml;
   d.appendChild(i);
   msgs.insertBefore(d, document.getElementById('typing'));
@@ -495,18 +505,26 @@ function handleFile(inp) {{
   var reader = new FileReader();
   reader.onload = function(e) {{
     var b64 = e.target.result.split(',')[1];
-    pendingFile = {{ name: file.name, size: file.size, mime: file.type, b64: b64 }};
+    var detectedMime = file.type;
+    if (!detectedMime) {{
+      var ext = file.name.split('.').pop().toLowerCase();
+      var mimeMap = {{ pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg',
+                       png:'image/png', gif:'image/gif', webp:'image/webp',
+                       txt:'text/plain', md:'text/markdown' }};
+      detectedMime = mimeMap[ext] || 'application/octet-stream';
+    }}
+    pendingFile = {{ name: file.name, size: file.size, mime: detectedMime, b64: b64 }};
 
     // Show preview bar
     document.getElementById('file-name').textContent = file.name;
     document.getElementById('file-size').textContent = (file.size/1024).toFixed(0) + ' KB';
     document.getElementById('file-preview').style.display = 'block';
 
-    if (file.type.startsWith('image/')) {{
+    if (detectedMime.startsWith('image/')) {{
       document.getElementById('file-icon').textContent = '🖼️';
       document.getElementById('img-preview-wrap').style.display = 'block';
       document.getElementById('img-preview').src = e.target.result;
-    }} else if (file.type === 'application/pdf') {{
+    }} else if (detectedMime === 'application/pdf') {{
       document.getElementById('file-icon').textContent = '📕';
       document.getElementById('img-preview-wrap').style.display = 'none';
     }} else {{
@@ -661,10 +679,6 @@ async def api_chat(request: Request):
     if not msg and not file:
         return JSONResponse({"error": "empty"})
 
-    # DEBUG — remove after confirming file arrives
-    if file:
-        return JSONResponse({"reply": f"DEBUG: file received — name={file.get('name')}, mime={file.get('mime')}, b64_len={len(file.get('b64',''))}"})
-
     data    = load_user(u)
     history = (data or {}).get("chats", {}).get(sid, {}).get("history", [])
 
@@ -720,10 +734,10 @@ async def api_chat(request: Request):
                 max_tokens=1024,
                 temperature=0.7,
             )
-            reply = r.choices[0].message.content.strip()
+            reply = strip_think(r.choices[0].message.content)
         else:
             r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
-            reply = r.choices[0].message.content.strip()
+            reply = strip_think(r.choices[0].message.content)
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower():
