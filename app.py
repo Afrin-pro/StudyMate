@@ -490,51 +490,44 @@ function handleFile(inp) {{
   var file = inp.files[0];
   if (!file) return;
   if (file.size > {MAX_FILE_MB} * 1024 * 1024) {{
-    alert('File too large. Maximum size is {MAX_FILE_MB} MB.');
-    inp.value = '';
-    return;
+    alert("File too large. Maximum size is {MAX_FILE_MB} MB.");
+    inp.value = ""; return;
   }}
-  var allowed = ['application/pdf','text/plain','text/markdown',
-                 'image/jpeg','image/png','image/gif','image/webp'];
-  if (!allowed.includes(file.type) && !file.name.match(/\\.(pdf|txt|md)$/i)) {{
-    alert('Unsupported file. Please upload a PDF, image, or text file.');
-    inp.value = '';
-    return;
+  // Detect mime from extension for mobile browsers where file.type can be empty
+  var detectedMime = file.type;
+  if (!detectedMime) {{
+    var extMap = {{ pdf:"application/pdf", jpg:"image/jpeg", jpeg:"image/jpeg",
+                   png:"image/png", gif:"image/gif", webp:"image/webp",
+                   txt:"text/plain", md:"text/markdown" }};
+    detectedMime = extMap[file.name.split(".").pop().toLowerCase()] || "";
   }}
-
+  var allowed = ["application/pdf","text/plain","text/markdown",
+                 "image/jpeg","image/png","image/gif","image/webp"];
+  if (!allowed.includes(detectedMime)) {{
+    alert("Unsupported file. Please upload a PDF, image (JPG/PNG/GIF/WebP), or text file.");
+    inp.value = ""; return;
+  }}
   var reader = new FileReader();
   reader.onload = function(e) {{
-    var b64 = e.target.result.split(',')[1];
-    var detectedMime = file.type;
-    if (!detectedMime) {{
-      var ext = file.name.split('.').pop().toLowerCase();
-      var mimeMap = {{ pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg',
-                       png:'image/png', gif:'image/gif', webp:'image/webp',
-                       txt:'text/plain', md:'text/markdown' }};
-      detectedMime = mimeMap[ext] || 'application/octet-stream';
-    }}
+    var b64 = e.target.result.split(",")[1];
     pendingFile = {{ name: file.name, size: file.size, mime: detectedMime, b64: b64 }};
-
-    // Show preview bar
-    document.getElementById('file-name').textContent = file.name;
-    document.getElementById('file-size').textContent = (file.size/1024).toFixed(0) + ' KB';
-    document.getElementById('file-preview').style.display = 'block';
-
-    if (detectedMime.startsWith('image/')) {{
-      document.getElementById('file-icon').textContent = '🖼️';
-      document.getElementById('img-preview-wrap').style.display = 'block';
-      document.getElementById('img-preview').src = e.target.result;
-    }} else if (detectedMime === 'application/pdf') {{
-      document.getElementById('file-icon').textContent = '📕';
-      document.getElementById('img-preview-wrap').style.display = 'none';
+    document.getElementById("file-name").textContent = file.name;
+    document.getElementById("file-size").textContent = (file.size/1024).toFixed(0) + " KB";
+    document.getElementById("file-preview").style.display = "block";
+    if (detectedMime.startsWith("image/")) {{
+      document.getElementById("file-icon").textContent = "🖼️";
+      document.getElementById("img-preview-wrap").style.display = "block";
+      document.getElementById("img-preview").src = e.target.result;
+    }} else if (detectedMime === "application/pdf") {{
+      document.getElementById("file-icon").textContent = "📕";
+      document.getElementById("img-preview-wrap").style.display = "none";
     }} else {{
-      document.getElementById('file-icon').textContent = '📄';
-      document.getElementById('img-preview-wrap').style.display = 'none';
+      document.getElementById("file-icon").textContent = "📄";
+      document.getElementById("img-preview-wrap").style.display = "none";
     }}
   }};
   reader.readAsDataURL(file);
 }}
-
 function clearFile() {{
   pendingFile = null;
   document.getElementById('file-inp').value = '';
@@ -557,7 +550,7 @@ async function send() {{
   var userDisplay = msg || '';
   var imgHtml = '';
   if (pendingFile) {{
-    if (pendingFile.mime.startsWith('image/')) {{
+    if (pendingFile && pendingFile.mime && pendingFile.mime.startsWith('image/')) {{
       imgHtml = '<br/><img src="data:'+pendingFile.mime+';base64,'+pendingFile.b64+'"'
                +' style="max-width:220px;max-height:160px;border-radius:10px;margin-top:8px;display:block;"/>';
       userDisplay = (msg || '') + (msg ? '' : '');
