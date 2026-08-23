@@ -24,7 +24,7 @@ GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
 
 def strip_think(text: str) -> str:
-    """Remove <think>...</think> reasoning blocks some models leak into output."""
+    """Remove <think>...</think> reasoning blocks that some models leak into output."""
     import re
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
@@ -460,9 +460,15 @@ setInterval(function(){{
   if(d) d.textContent='.'.repeat(n||1);
 }},400);
 
-function esc(s){{
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')
-          .replace(/>/g,'&gt;').replace(/\\n/g,'<br/>');
+function renderMarkdown(s){{
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
+  s = s.replace(/`([^`]+)`/g,'<code style="background:#f3e8ff;padding:1px 5px;border-radius:4px;font-size:.88em;font-family:monospace">$1</code>');
+  s = s.replace(/(^|\n)[\-\*] (.+)/g,'$1\u2022 $2');
+  s = s.replace(/\n/g,'<br/>');
+  return s;
 }}
 
 function bubble(role, text, extraHtml){{
@@ -474,7 +480,7 @@ function bubble(role, text, extraHtml){{
   }}else{{
     i.style.cssText='background:#fff;color:#1e1b4b;border-radius:20px 20px 20px 4px;padding:12px 16px;max-width:72%;font-size:.92rem;line-height:1.5;box-shadow:0 4px 24px rgba(139,92,246,.14);border:1px solid #e9d5ff;';
   }}
-  i.innerHTML = esc(text);
+  i.innerHTML = renderMarkdown(text);
   if (extraHtml) i.innerHTML += extraHtml;
   d.appendChild(i);
   msgs.insertBefore(d, document.getElementById('typing'));
