@@ -24,7 +24,6 @@ GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
 
 def strip_think(text: str) -> str:
-    """Remove <think>...</think> reasoning blocks that some models leak into output."""
     import re
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
@@ -497,7 +496,8 @@ function handleFile(inp) {{
   }}
   var allowed = ['application/pdf','text/plain','text/markdown',
                  'image/jpeg','image/png','image/gif','image/webp'];
-  if (!allowed.includes(file.type) && !file.name.match(/\\.(pdf|txt|md)$/i)) {{
+  var checkMime = file.type || (file.name.split('.').pop() || '');
+  if (!allowed.includes(file.type) && !file.name.match(/\\.(pdf|txt|md|jpe?g|png|gif|webp)$/i)) {{
     alert('Unsupported file. Please upload a PDF, image, or text file.');
     inp.value = '';
     return;
@@ -506,18 +506,26 @@ function handleFile(inp) {{
   var reader = new FileReader();
   reader.onload = function(e) {{
     var b64 = e.target.result.split(',')[1];
-    pendingFile = {{ name: file.name, size: file.size, mime: file.type, b64: b64 }};
+    var detectedMime = file.type;
+    if (!detectedMime) {{
+      var ext = file.name.split('.').pop().toLowerCase();
+      var mimeMap = {{ pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg',
+                       png:'image/png', gif:'image/gif', webp:'image/webp',
+                       txt:'text/plain', md:'text/markdown' }};
+      detectedMime = mimeMap[ext] || '';
+    }}
+    pendingFile = {{ name: file.name, size: file.size, mime: detectedMime, b64: b64 }};
 
     // Show preview bar
     document.getElementById('file-name').textContent = file.name;
     document.getElementById('file-size').textContent = (file.size/1024).toFixed(0) + ' KB';
     document.getElementById('file-preview').style.display = 'block';
 
-    if (file.type.startsWith('image/')) {{
+    if (detectedMime.startsWith('image/')) {{
       document.getElementById('file-icon').textContent = '🖼️';
       document.getElementById('img-preview-wrap').style.display = 'block';
       document.getElementById('img-preview').src = e.target.result;
-    }} else if (file.type === 'application/pdf') {{
+    }} else if (detectedMime === 'application/pdf') {{
       document.getElementById('file-icon').textContent = '📕';
       document.getElementById('img-preview-wrap').style.display = 'none';
     }} else {{
