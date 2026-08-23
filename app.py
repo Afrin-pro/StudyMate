@@ -18,14 +18,10 @@ except ImportError:
     HAS_PIL = False
 
 TEXT_MODEL  = "Qwen/Qwen2.5-72B-Instruct"
-VISION_MODEL = "qwen/qwen3.6-27b"
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 HF_TOKEN    = os.environ.get("HF_TOKEN")
 GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
-
-def strip_think(text: str) -> str:
-    import re
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
@@ -459,15 +455,9 @@ setInterval(function(){{
   if(d) d.textContent='.'.repeat(n||1);
 }},400);
 
-function renderMarkdown(s){{
-  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
-  s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
-  s = s.replace(/`([^`]+)`/g,'<code style="background:#f3e8ff;padding:1px 5px;border-radius:4px;font-size:.88em;font-family:monospace">$1</code>');
-  s = s.replace(/(^|\n)[\-\*] (.+)/g,'$1\u2022 $2');
-  s = s.replace(/\n/g,'<br/>');
-  return s;
+function esc(s){{
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')
+          .replace(/>/g,'&gt;').replace(/\\n/g,'<br/>');
 }}
 
 function bubble(role, text, extraHtml){{
@@ -479,7 +469,7 @@ function bubble(role, text, extraHtml){{
   }}else{{
     i.style.cssText='background:#fff;color:#1e1b4b;border-radius:20px 20px 20px 4px;padding:12px 16px;max-width:72%;font-size:.92rem;line-height:1.5;box-shadow:0 4px 24px rgba(139,92,246,.14);border:1px solid #e9d5ff;';
   }}
-  i.innerHTML = renderMarkdown(text);
+  i.innerHTML = esc(text);
   if (extraHtml) i.innerHTML += extraHtml;
   d.appendChild(i);
   msgs.insertBefore(d, document.getElementById('typing'));
@@ -496,8 +486,7 @@ function handleFile(inp) {{
   }}
   var allowed = ['application/pdf','text/plain','text/markdown',
                  'image/jpeg','image/png','image/gif','image/webp'];
-  var checkMime = file.type || (file.name.split('.').pop() || '');
-  if (!allowed.includes(file.type) && !file.name.match(/\\.(pdf|txt|md|jpe?g|png|gif|webp)$/i)) {{
+  if (!allowed.includes(file.type) && !file.name.match(/\\.(pdf|txt|md)$/i)) {{
     alert('Unsupported file. Please upload a PDF, image, or text file.');
     inp.value = '';
     return;
@@ -506,26 +495,18 @@ function handleFile(inp) {{
   var reader = new FileReader();
   reader.onload = function(e) {{
     var b64 = e.target.result.split(',')[1];
-    var detectedMime = file.type;
-    if (!detectedMime) {{
-      var ext = file.name.split('.').pop().toLowerCase();
-      var mimeMap = {{ pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg',
-                       png:'image/png', gif:'image/gif', webp:'image/webp',
-                       txt:'text/plain', md:'text/markdown' }};
-      detectedMime = mimeMap[ext] || '';
-    }}
-    pendingFile = {{ name: file.name, size: file.size, mime: detectedMime, b64: b64 }};
+    pendingFile = {{ name: file.name, size: file.size, mime: file.type, b64: b64 }};
 
     // Show preview bar
     document.getElementById('file-name').textContent = file.name;
     document.getElementById('file-size').textContent = (file.size/1024).toFixed(0) + ' KB';
     document.getElementById('file-preview').style.display = 'block';
 
-    if (detectedMime.startsWith('image/')) {{
+    if (file.type.startsWith('image/')) {{
       document.getElementById('file-icon').textContent = '🖼️';
       document.getElementById('img-preview-wrap').style.display = 'block';
       document.getElementById('img-preview').src = e.target.result;
-    }} else if (detectedMime === 'application/pdf') {{
+    }} else if (file.type === 'application/pdf') {{
       document.getElementById('file-icon').textContent = '📕';
       document.getElementById('img-preview-wrap').style.display = 'none';
     }} else {{
@@ -680,6 +661,10 @@ async def api_chat(request: Request):
     if not msg and not file:
         return JSONResponse({"error": "empty"})
 
+    # DEBUG — remove after confirming file arrives
+    if file:
+        return JSONResponse({"reply": f"DEBUG: file received — name={file.get('name')}, mime={file.get('mime')}, b64_len={len(file.get('b64',''))}"})
+
     data    = load_user(u)
     history = (data or {}).get("chats", {}).get(sid, {}).get("history", [])
 
@@ -735,10 +720,10 @@ async def api_chat(request: Request):
                 max_tokens=1024,
                 temperature=0.7,
             )
-            reply = strip_think(r.choices[0].message.content)
+            reply = r.choices[0].message.content.strip()
         else:
             r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
-            reply = strip_think(r.choices[0].message.content)
+            reply = r.choices[0].message.content.strip()
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower():
