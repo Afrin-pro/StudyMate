@@ -23,9 +23,9 @@ HF_TOKEN    = os.environ.get("HF_TOKEN")
 GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
 
-def strip_think(text: str) -> str:
+def strip_think(text):
     import re
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return re.sub(r"<think>.*?</think>","",text,flags=re.DOTALL).strip()
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
@@ -448,8 +448,7 @@ var SID = "{active_sid}";
 var TOK = "{tok}";
 var msgs = document.getElementById('msgs');
 msgs.scrollTop = msgs.scrollHeight;
-
-var pendingFile = null;  // {{ name, size, mime, data (base64 or null for PDF) }}
+var pendingFile = null;
 
 // Animated dots
 var n=0;
@@ -464,8 +463,8 @@ function renderMarkdown(s){{
   s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
-  s = s.replace(/`([^`]+)`/g,'<code style="background:#f3e8ff;padding:1px 5px;border-radius:4px;font-size:.88em;font-family:monospace">$1</code>');
-  s = s.replace(/(^|\n)[\-\*] (.+)/g,'$1\u2022 $2');
+  s = s.replace(/`([^`]+)`/g,'<code style="background:#f3e8ff;padding:2px 6px;border-radius:4px;font-size:.88em">$1</code>');
+  s = s.replace(/(^|\n)[*-] (.+)/g,'$1&bull; $2');
   s = s.replace(/\n/g,'<br/>');
   return s;
 }}
@@ -486,49 +485,53 @@ function bubble(role, text, extraHtml){{
   msgs.scrollTop = msgs.scrollHeight;
 }}
 
-function handleFile(inp) {{
+function getMime(file){{
+  if (file.type) return file.type;
+  var ext = file.name.split('.').pop().toLowerCase();
+  var map = {{
+    jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png',
+    gif:'image/gif',  webp:'image/webp', pdf:'application/pdf',
+    txt:'text/plain', md:'text/markdown'
+  }};
+  return map[ext] || '';
+}}
+
+function handleFile(inp){{
   var file = inp.files[0];
   if (!file) return;
-  if (file.size > {MAX_FILE_MB} * 1024 * 1024) {{
-    alert("File too large. Maximum size is {MAX_FILE_MB} MB.");
-    inp.value = ""; return;
+  if (file.size > {MAX_FILE_MB} * 1024 * 1024){{
+    alert('File too large. Max {MAX_FILE_MB} MB.'); inp.value=''; return;
   }}
-  // Detect mime from extension for mobile browsers where file.type can be empty
-  var detectedMime = file.type;
-  if (!detectedMime) {{
-    var extMap = {{ pdf:"application/pdf", jpg:"image/jpeg", jpeg:"image/jpeg",
-                   png:"image/png", gif:"image/gif", webp:"image/webp",
-                   txt:"text/plain", md:"text/markdown" }};
-    detectedMime = extMap[file.name.split(".").pop().toLowerCase()] || "";
-  }}
-  var allowed = ["application/pdf","text/plain","text/markdown",
-                 "image/jpeg","image/png","image/gif","image/webp"];
-  if (!allowed.includes(detectedMime)) {{
-    alert("Unsupported file. Please upload a PDF, image (JPG/PNG/GIF/WebP), or text file.");
-    inp.value = ""; return;
+  var mime = getMime(file);
+  var ok = ['application/pdf','text/plain','text/markdown',
+             'image/jpeg','image/png','image/gif','image/webp'];
+  if (!ok.includes(mime)){{
+    alert('Unsupported file. Please upload a PDF, image (JPG/PNG/GIF/WebP), or text file.');
+    inp.value=''; return;
   }}
   var reader = new FileReader();
-  reader.onload = function(e) {{
-    var b64 = e.target.result.split(",")[1];
-    pendingFile = {{ name: file.name, size: file.size, mime: detectedMime, b64: b64 }};
-    document.getElementById("file-name").textContent = file.name;
-    document.getElementById("file-size").textContent = (file.size/1024).toFixed(0) + " KB";
-    document.getElementById("file-preview").style.display = "block";
-    if (detectedMime.startsWith("image/")) {{
-      document.getElementById("file-icon").textContent = "🖼️";
-      document.getElementById("img-preview-wrap").style.display = "block";
-      document.getElementById("img-preview").src = e.target.result;
-    }} else if (detectedMime === "application/pdf") {{
-      document.getElementById("file-icon").textContent = "📕";
-      document.getElementById("img-preview-wrap").style.display = "none";
+  reader.onload = function(e){{
+    var b64 = e.target.result.split(',')[1];
+    pendingFile = {{name:file.name, size:file.size, mime:mime, b64:b64}};
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('file-size').textContent = (file.size/1024).toFixed(0)+' KB';
+    document.getElementById('file-preview').style.display = 'block';
+    if (mime.startsWith('image/')){{
+      document.getElementById('file-icon').textContent = '🖼️';
+      document.getElementById('img-preview-wrap').style.display = 'block';
+      document.getElementById('img-preview').src = e.target.result;
+    }} else if (mime === 'application/pdf'){{
+      document.getElementById('file-icon').textContent = '📕';
+      document.getElementById('img-preview-wrap').style.display = 'none';
     }} else {{
-      document.getElementById("file-icon").textContent = "📄";
-      document.getElementById("img-preview-wrap").style.display = "none";
+      document.getElementById('file-icon').textContent = '📄';
+      document.getElementById('img-preview-wrap').style.display = 'none';
     }}
   }};
   reader.readAsDataURL(file);
 }}
-function clearFile() {{
+
+function clearFile(){{
   pendingFile = null;
   document.getElementById('file-inp').value = '';
   document.getElementById('file-preview').style.display = 'none';
@@ -536,55 +539,51 @@ function clearFile() {{
   document.getElementById('img-preview').src = '';
 }}
 
-async function send() {{
+async function send(){{
   var inp = document.getElementById('inp');
   var msg = inp.value.trim();
   if (!msg && !pendingFile) return;
-
-  inp.value = ''; inp.style.height = '';
+  inp.value=''; inp.style.height='';
   document.getElementById('sbtn').disabled = true;
   document.getElementById('typing').style.display = 'block';
   msgs.scrollTop = msgs.scrollHeight;
 
-  // Show user bubble
   var userDisplay = msg || '';
   var imgHtml = '';
-  if (pendingFile) {{
-    if (pendingFile && pendingFile.mime && pendingFile.mime.startsWith('image/')) {{
+  if (pendingFile){{
+    if (pendingFile.mime.startsWith('image/')){{
       imgHtml = '<br/><img src="data:'+pendingFile.mime+';base64,'+pendingFile.b64+'"'
-               +' style="max-width:220px;max-height:160px;border-radius:10px;margin-top:8px;display:block;"/>';
-      userDisplay = (msg || '') + (msg ? '' : '');
+              +' style="max-width:220px;max-height:160px;border-radius:10px;margin-top:8px;display:block;"/>';
     }} else {{
-      userDisplay = '📎 ' + pendingFile.name + (msg ? '\\n' + msg : '');
+      userDisplay = '📎 '+pendingFile.name+(msg ? '\n'+msg : '');
     }}
   }}
   bubble('user', userDisplay, imgHtml);
 
-  var payload = {{ sid: SID, message: msg }};
+  var payload = {{sid:SID, message:msg}};
   if (pendingFile) payload.file = pendingFile;
-  var f = pendingFile;
   clearFile();
 
-  try {{
+  try{{
     var r = await fetch('/api/chat?t='+TOK, {{
-      method: 'POST',
-      headers: {{'Content-Type':'application/json'}},
+      method:'POST',
+      headers:{{'Content-Type':'application/json'}},
       body: JSON.stringify(payload)
     }});
     var data = await r.json();
     document.getElementById('typing').style.display = 'none';
-    if (data.reply) {{
+    if (data.reply){{
       bubble('assistant', data.reply);
       if (data.sid) SID = data.sid;
       if (data.refresh_sidebar) setTimeout(function(){{
-        location.href = '/chat/' + SID + '?t=' + TOK;
-      }}, 300);
+        location.href = '/chat/'+SID+'?t='+TOK;
+      }},300);
     }} else {{
-      bubble('assistant', '⚠️ Something went wrong. Please try again.');
+      bubble('assistant','⚠️ Something went wrong. Please try again.');
     }}
-  }} catch(e) {{
+  }} catch(e){{
     document.getElementById('typing').style.display = 'none';
-    bubble('assistant', '⚠️ Network error. Please try again.');
+    bubble('assistant','⚠️ Network error: '+e.message);
   }}
   document.getElementById('sbtn').disabled = false;
   inp.focus();
