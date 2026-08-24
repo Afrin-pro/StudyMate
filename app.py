@@ -459,7 +459,7 @@ setInterval(function(){{
 }},400);
 
 function renderMarkdown(s){{
-  s = s.replace(/<think>[^]*?<\/think>/gi, '');
+  while(s.indexOf('<think>') !== -1){ var a=s.indexOf('<think>'),b=s.indexOf('</think>',a); if(b===-1) break; s=s.slice(0,a)+s.slice(b+8); }
   s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
