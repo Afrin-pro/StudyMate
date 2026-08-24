@@ -459,7 +459,7 @@ setInterval(function(){{
 }},400);
 
 function renderMarkdown(s){{
-  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  s = s.replace(/<think>[^]*?<\/think>/gi, '');
   s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
