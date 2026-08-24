@@ -464,6 +464,7 @@ function renderMarkdown(s){{
   s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
   s = s.replace(/`([^`]+)`/g,'<code style="background:#f3e8ff;padding:2px 6px;border-radius:4px;font-size:.88em">$1</code>');
+  s = s.replace(/^#{{1,6}}\\s+(.+)$/gm,'<strong style="display:block;margin-top:10px;margin-bottom:4px;font-size:1.05em;">$1</strong>');
   s = s.replace(/(^|\\n)[*-] (.+)/g,'$1&bull; $2');
   s = s.replace(/\\n/g,'<br/>');
   return s;
