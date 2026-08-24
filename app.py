@@ -464,8 +464,8 @@ function renderMarkdown(s){{
   s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
   s = s.replace(/`([^`]+)`/g,'<code style="background:#f3e8ff;padding:2px 6px;border-radius:4px;font-size:.88em">$1</code>');
-  s = s.replace(/(^|\n)[*-] (.+)/g,'$1&bull; $2');
-  s = s.replace(/\n/g,'<br/>');
+  s = s.replace(/(^|\\n)[*-] (.+)/g,'$1&bull; $2');
+  s = s.replace(/\\n/g,'<br/>');
   return s;
 }}
 
@@ -555,7 +555,7 @@ async function send(){{
       imgHtml = '<br/><img src="data:'+pendingFile.mime+';base64,'+pendingFile.b64+'"'
               +' style="max-width:220px;max-height:160px;border-radius:10px;margin-top:8px;display:block;"/>';
     }} else {{
-      userDisplay = '📎 '+pendingFile.name+(msg ? '\n'+msg : '');
+      userDisplay = '📎 '+pendingFile.name+(msg ? '\\n'+msg : '');
     }}
   }}
   bubble('user', userDisplay, imgHtml);
