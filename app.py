@@ -71,6 +71,32 @@ def strip_reasoning_preamble(text):
                 return recovered
     return text
 
+def render_markdown_py(text: str) -> str:
+    """Server-side mirror of the client's renderMarkdown() JS function.
+    Needed because chat history gets re-rendered server-side (chat_page())
+    after the page reload that follows a new chat's first message — without
+    this, that reload showed raw '**text**' / '## Heading' instead of the
+    formatted version the live chat briefly displayed."""
+    if not text:
+        return ""
+    s = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"\*(.+?)\*", r"<em>\1</em>", s)
+    s = re.sub(
+        r"`([^`]+)`",
+        r'<code style="background:#f3e8ff;padding:2px 6px;border-radius:4px;font-size:.88em">\1</code>',
+        s,
+    )
+    s = re.sub(
+        r"^#{1,6}\s+(.+)$",
+        r'<strong style="display:block;margin-top:10px;margin-bottom:4px;font-size:1.05em;">\1</strong>',
+        s,
+        flags=re.MULTILINE,
+    )
+    s = re.sub(r"(^|\n)[*-] (.+)", r"\1&bull; \2", s)
+    s = s.replace("\n", "<br/>")
+    return s
+
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
     "Help students learn concepts, solve problems, and prepare for exams. "
@@ -332,8 +358,7 @@ def chat_page(username, tok, history, hist_items, active_sid=""):
         else:
             display = content
 
-        display = (display.replace("&","&amp;").replace("<","&lt;")
-                          .replace(">","&gt;").replace("\n","<br/>"))
+        display = render_markdown_py(display)
 
         if msg["role"] == "user":
             bubbles += (
