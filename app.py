@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, Form, UploadFile, File  # v2024-fix
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-import uvicorn, json, os, hashlib, time, secrets, base64, io
+import uvicorn, json, os, hashlib, time, secrets, base64, io, re
 from datetime import datetime
 from huggingface_hub import InferenceClient
 
@@ -24,15 +24,64 @@ GROQ_KEY    = os.environ.get("GROQ_API_KEY")
 text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
 
 def strip_think(text):
-    import re
-    return re.sub(r"<think>.*?</think>","",text,flags=re.DOTALL).strip()
+    if not text:
+        return text
+    # Catch tag-name variants some reasoning models use, case-insensitively.
+    text = re.sub(r"<(think|thinking|reasoning)>.*?</\1>", "", text,
+                   flags=re.DOTALL | re.IGNORECASE)
+    # If generation got cut off by max_tokens before the closing tag was
+    # ever emitted, the pattern above won't match (no closing tag), and the
+    # raw chain-of-thought — with no real answer attached — would otherwise
+    # leak straight through. Drop everything from the opening tag onward.
+    text = re.sub(r"<(think|thinking|reasoning)>.*$", "", text,
+                   flags=re.DOTALL | re.IGNORECASE)
+    return text.strip()
+
+# Some reasoning models (observed with qwen3.6-27b on vision requests) don't
+# wrap their scratchpad in <think> tags at all — they just narrate it as
+# plain prose ("Here's a thinking process: 1. Analyze User Input: ... 5.
+# Draft Response: <the real answer>"). strip_think() can't catch that since
+# there's no tag to match. This is a safety-net fallback for that case: if
+# the reply opens with an obvious planning preamble, recover just the part
+# after the last "Draft/Final Response" style marker.
+_REASONING_PREAMBLE_RE = re.compile(
+    r"^\s*(here'?s (a|my) (thinking process|internal (reasoning|monologue))|"
+    r"let me think|okay,?\s*let'?s|i need to (analyz|analys)e|"
+    r"let'?s break (this|it) down|first,? i'?ll)",
+    re.IGNORECASE,
+)
+_DRAFT_MARKER_RE = re.compile(
+    r"\n[ \t]*\d+[\.\)][ \t]*(draft response|final response|final answer|"
+    r"the (actual )?(reply|response|answer))[^\n]*\n",
+    re.IGNORECASE,
+)
+
+def strip_reasoning_preamble(text):
+    """Fallback cleanup for untagged leaked chain-of-thought. Only acts when
+    the reply clearly opens with a 'thinking process' style preamble, so it
+    won't touch normal answers (including ones that legitimately start with
+    a numbered list)."""
+    if not text:
+        return text
+    if _REASONING_PREAMBLE_RE.match(text):
+        matches = list(_DRAFT_MARKER_RE.finditer(text))
+        if matches:
+            recovered = text[matches[-1].end():].strip()
+            if recovered:
+                return recovered
+    return text
 
 SYSTEM_PROMPT = (
     "You are StudyMate, an intelligent and friendly study assistant. "
     "Help students learn concepts, solve problems, and prepare for exams. "
     "When given document content or images, analyse them carefully and answer questions about them. "
     "Explain clearly with examples and break down complex topics. "
-    "Be encouraging and patient. Use bullet points or numbered lists when helpful."
+    "Be encouraging and patient. Use bullet points or numbered lists when helpful. "
+    "Respond with ONLY your final answer to the student. Never narrate your own "
+    "reasoning, planning, or analysis process (e.g. do not write things like "
+    "'Here's a thinking process', numbered internal steps such as 'Analyze "
+    "User Input' or 'Draft Response', or any other behind-the-scenes commentary). "
+    "Go straight to the answer as if you already know it."
 )
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -459,7 +508,17 @@ setInterval(function(){{
 }},400);
 
 function renderMarkdown(s){{
-  while(s.indexOf('<think>') !== -1){{ var a=s.indexOf('<think>'),b=s.indexOf('</think>',a); if(b===-1) break; s=s.slice(0,a)+s.slice(b+8); }}
+  var low = s.toLowerCase();
+  while(true){{
+    var a = low.indexOf('<think>');
+    if (a === -1) break;
+    var b = low.indexOf('</think>', a);
+    if (b === -1){{ s = s.slice(0,a); low = low.slice(0,a); break; }}
+    s = s.slice(0,a) + s.slice(b+8);
+    low = low.slice(0,a) + low.slice(b+8);
+  }}
+  s = s.trim();
+  if (!s) s = '⚠️ (empty response — please try again)';
   s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
@@ -721,16 +780,41 @@ async def api_chat(request: Request):
             # Use Groq SDK — avoids Cloudflare blocks that urllib triggers
             from groq import Groq as GroqClient
             groq_client = GroqClient(api_key=GROQ_KEY)
-            r = groq_client.chat.completions.create(
+            vision_kwargs = dict(
                 model=VISION_MODEL,
                 messages=messages,
-                max_tokens=1024,
+                max_tokens=2048,  # was 1024 — too tight a budget for a reasoning
+                                  # model to finish its <think> block AND write
+                                  # a real answer, which is what was causing the
+                                  # chain-of-thought to leak (see strip_think).
                 temperature=0.7,
             )
+            try:
+                # Ask Groq to keep the model's chain-of-thought server-side,
+                # in a separate `reasoning` field we simply never read, rather
+                # than mixed into the visible content at all. This is the
+                # real fix for qwen3.6-27b narrating its scratchpad as plain
+                # prose with no <think> tags for strip_think() to catch.
+                r = groq_client.chat.completions.create(reasoning_format="hidden", **vision_kwargs)
+            except Exception as e:
+                if "429" in str(e) or "rate limit" in str(e).lower():
+                    raise
+                # Deployment/model doesn't accept reasoning_format — retry
+                # without it and fall back to the text-based safety nets below.
+                r = groq_client.chat.completions.create(**vision_kwargs)
             reply = strip_think(r.choices[0].message.content)
+            reply = strip_reasoning_preamble(reply)
+            if not reply:
+                # All the token budget went to reasoning and none to an
+                # actual answer (or the closing tag never arrived) — say so
+                # plainly instead of showing nothing or leaking raw CoT.
+                reply = ("⚠️ I started analysing that but ran out of room "
+                          "before finishing my answer. Please try again — "
+                          "a shorter question about the image usually helps.")
         else:
             r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
             reply = strip_think(r.choices[0].message.content)
+            reply = strip_reasoning_preamble(reply)
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower():
