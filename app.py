@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, Form, UploadFile, File  # v2024-fix
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-import uvicorn, json, os, hashlib, time, secrets, base64, io, re
+import uvicorn, json, os, hashlib, time, secrets, base64, io, re, html as _html
 from datetime import datetime
 from huggingface_hub import InferenceClient
 
@@ -142,11 +142,17 @@ for d in [DATA_DIR, SESSION_DIR, UPLOAD_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # ── Storage ───────────────────────────────────────────────────────────────────
+# Input validation: usernames and tokens end up in file paths, so they must be
+# constrained. Tokens are secrets.token_hex(24) -> exactly 48 hex chars.
+USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\- ]{0,31}$")
+TOKEN_RE    = re.compile(r"^[0-9a-f]{48}$")
+
 def hash_pw(pw):       return hashlib.sha256(pw.encode()).hexdigest()
 def user_file(u):      return os.path.join(DATA_DIR,    f"{u}.json")
 def session_file(tok): return os.path.join(SESSION_DIR, f"{tok}.json")
 
 def load_user(u):
+    if not isinstance(u, str) or not USERNAME_RE.match(u): return None
     fp = user_file(u)
     return json.load(open(fp)) if os.path.exists(fp) else None
 
@@ -159,7 +165,7 @@ def create_session(username):
     return tok
 
 def get_session(tok):
-    if not tok: return None
+    if not tok or not TOKEN_RE.match(tok): return None   # blocks ../ traversal
     fp = session_file(tok)
     if not os.path.exists(fp): return None
     return json.load(open(fp))
@@ -179,7 +185,8 @@ def current_user(request: Request):
     return sess["username"] if sess else None
 
 def tok_from(request: Request):
-    return request.query_params.get("t") or request.cookies.get("sm_tok") or ""
+    tok = request.query_params.get("t") or request.cookies.get("sm_tok") or ""
+    return tok if TOKEN_RE.match(tok) else ""
 
 # ── File processing ───────────────────────────────────────────────────────────
 def extract_pdf_text(data: bytes) -> str:
@@ -340,7 +347,7 @@ def chat_page(username, tok, history, hist_items, active_sid=""):
             f'border-radius:11px;margin-bottom:3px;font-size:.83rem;color:#374151;'
             f'border:1px solid transparent;white-space:nowrap;overflow:hidden;'
             f'text-overflow:ellipsis;font-weight:500;text-decoration:none;{bg}"'
-            f' onmouseover="{hov_on}" onmouseout="{hov_off}">💬 {title}</a>'
+            f' onmouseover="{hov_on}" onmouseout="{hov_off}">💬 {_html.escape(title)}</a>'
         )
     if not hist_rows:
         hist_rows = '<p style="color:#9ca3af;font-size:.82rem;padding:8px 6px;">No chats yet</p>'
@@ -402,7 +409,7 @@ def chat_page(username, tok, history, hist_items, active_sid=""):
       <div style="font-family:'Space Grotesk',sans-serif;font-size:1.2rem;
                   font-weight:700;color:#8b5cf6;">✦ StudyMate</div>
       <div style="font-size:.75rem;color:#6b7280;margin-top:3px;">Study Assistant · Online</div>
-      <div style="font-size:.74rem;color:#a78bfa;margin-top:2px;font-weight:500;">👤 {username}</div>
+      <div style="font-size:.74rem;color:#a78bfa;margin-top:2px;font-weight:500;">👤 {_html.escape(username)}</div>
     </div>
     <div style="padding:14px 16px 6px;flex-shrink:0;">
       <a href="/new{T}" style="display:block;text-align:center;text-decoration:none;
@@ -678,6 +685,90 @@ async function send(){{
 # ── FastAPI App ────────────────────────────────────────────────────────────────
 app = FastAPI()
 
+# ── Telemetry ─────────────────────────────────────────────────────────────────
+# Lightweight in-process metrics + structured logs. Exposed at /metrics in
+# Prometheus text format and /health for uptime probes. No external deps.
+import logging, threading
+from collections import defaultdict
+
+logger = logging.getLogger("studymate")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+
+class Metrics:
+    """Thread-safe counters and latency summaries."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
+        with getattr(self, "_lock", threading.Lock()):
+            self.counters = defaultdict(int)
+            self.latency_sum = defaultdict(float)
+            self.latency_count = defaultdict(int)
+            self.started = time.time()
+
+    def inc(self, name, **labels):
+        key = (name, tuple(sorted(labels.items())))
+        with self._lock:
+            self.counters[key] += 1
+
+    def observe(self, name, seconds, **labels):
+        key = (name, tuple(sorted(labels.items())))
+        with self._lock:
+            self.latency_sum[key] += seconds
+            self.latency_count[key] += 1
+
+    def render(self):
+        def fmt(key):
+            name, labels = key
+            lab = ",".join(f'{k}="{v}"' for k, v in labels)
+            return f"{name}{{{lab}}}" if lab else name
+        lines = [f"studymate_uptime_seconds {time.time() - self.started:.1f}"]
+        with self._lock:
+            for key, v in sorted(self.counters.items()):
+                lines.append(f"{fmt(key)} {v}")
+            for key, s in sorted(self.latency_sum.items()):
+                n = self.latency_count[key]
+                nm, labels = key
+                lines.append(f"{fmt((nm + '_sum', labels))} {s:.4f}")
+                lines.append(f"{fmt((nm + '_count', labels))} {n}")
+        return "\n".join(lines) + "\n"
+
+metrics = Metrics()
+
+def log_event(event, **fields):
+    logger.info(json.dumps({"event": event, "ts": round(time.time(), 3), **fields}))
+
+@app.middleware("http")
+async def telemetry_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        dur = time.perf_counter() - start
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+        metrics.inc("studymate_http_requests_total", method=request.method, path=path, status=status)
+        metrics.observe("studymate_http_request_seconds", dur, path=path)
+        if status >= 500:
+            log_event("http_5xx", path=path, status=status)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "uptime_s": round(time.time() - metrics.started, 1)}
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(metrics.render())
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     if current_user(request): return RedirectResponse(f"/chat?t={tok_from(request)}")
@@ -701,6 +792,8 @@ async def do_register(request: Request, username: str = Form(...), password: str
     username = username.strip()
     if not username or not password:
         return HTMLResponse(auth_page(error="Username and password required.", tab="reg"))
+    if not USERNAME_RE.match(username):
+        return HTMLResponse(auth_page(error="Username must be 1-32 characters: letters, numbers, spaces, . _ - (start with a letter or number).", tab="reg"))
     if load_user(username):
         return HTMLResponse(auth_page(error="Username already exists.", tab="reg"))
     save_user({"username": username, "password": hash_pw(password), "chats": {}})
@@ -799,8 +892,11 @@ async def api_chat(request: Request):
         stored_user = msg
 
     # ── Call model ──────────────────────────────────────────────────────────
+    _t0 = time.perf_counter()
+    _route = "none"
     try:
         use_vision = file and file.get("mime","").startswith("image/")
+        _route = "vision" if use_vision else "text"
         if use_vision:
             # Use Groq SDK — avoids Cloudflare blocks that urllib triggers
             from groq import Groq as GroqClient
@@ -843,9 +939,14 @@ async def api_chat(request: Request):
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower():
+            metrics.inc("studymate_model_errors_total", route=_route, kind="rate_limit")
             reply = "⚠️ The image model is busy right now (rate limit). Please wait a moment and try again."
         else:
+            metrics.inc("studymate_model_errors_total", route=_route, kind="other")
             reply = f"⚠️ Error: {e}"
+        log_event("model_error", route=_route, error=err[:200])
+    metrics.observe("studymate_model_seconds", time.perf_counter() - _t0, route=_route)
+    metrics.inc("studymate_chat_total", route=_route, has_file=str(bool(file)).lower())
 
     # ── Persist ─────────────────────────────────────────────────────────────
     history = history + [
