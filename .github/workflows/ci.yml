@@ -1,0 +1,53 @@
+name: CI/CD
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { python: ["3.11", "3.12"] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}", cache: pip }
+      - uses: actions/setup-node@v4          # tests/frontend uses node --check
+        with: { node-version: "20" }
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check app.py tests scripts
+      - run: pytest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ matrix.python }}
+          path: |
+            coverage.xml
+            htmlcov/
+
+  deploy:                       # only on main, only if tests passed
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ vars.HF_USERNAME }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: git push --force "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE}" HEAD:main
+
+  smoke:                        # confirm the live Space actually came up
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for rebuild, then probe
+        run: |
+          for i in $(seq 1 20); do
+            sleep 30
+            python scripts/smoke_test.py "${{ vars.SPACE_URL }}" && exit 0
+          done
+          exit 1

@@ -1,0 +1,5 @@
+# Lint for real defects only (syntax errors, undefined names, unused imports/vars).
+line-length = 120
+[lint]
+select = ["E9", "F"]
+ignore = ["F401"]   # optional-dependency imports (pypdf/PIL) are intentionally guarded
