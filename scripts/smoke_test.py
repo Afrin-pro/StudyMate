@@ -1,4 +1,5 @@
 """Post-deploy smoke test: python scripts/smoke_test.py https://<space>.hf.space"""
+import os
 import json, sys, time, urllib.request, urllib.error
 
 
@@ -46,6 +47,11 @@ def run(base, retries=15, wait=30):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit("usage: smoke_test.py <base-url>")
-    sys.exit(run(sys.argv[1]))
+    url = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else os.environ.get("SPACE_URL", "")
+    )
+    if not url:
+        sys.exit("error: pass the Space URL as an argument or set SPACE_URL env var")
+    sys.exit(run(url))
