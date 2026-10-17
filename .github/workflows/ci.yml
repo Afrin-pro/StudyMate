@@ -38,14 +38,16 @@ jobs:
           git push space main --force
 
   smoke:
-     needs: [test, deploy]
-     if: github.ref == 'refs/heads/main' && vars.SPACE_URL != ''
-     runs-on: ubuntu-latest
-     steps:
+    needs: [test, deploy]
+    if: github.ref == 'refs/heads/main' && vars.SPACE_URL != ''
+    runs-on: ubuntu-latest
+    steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Wait for Space to come up
-        run: python scripts/smoke_test.py "${{ vars.SPACE_URL }}"
+        env:
+          SPACE_URL: ${{ vars.SPACE_URL }}
+        run: python scripts/smoke_test.py
           done
           exit 1
