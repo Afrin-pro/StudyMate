@@ -13,9 +13,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def check_models(available_ids, expected):
-    """Pure function (unit-testable): returns {model_id: bool}."""
-    available = set(available_ids)
-    return {m: m in available for m in expected}
+    # Groq's models.list() strips the org prefix (e.g. "qwen/qwen3.6-27b" → "qwen3.6-27b")
+    # Normalise both sides so the comparison works regardless of format.
+    def normalise(mid):
+        return mid.split("/")[-1].lower()
+
+    available = {normalise(m) for m in available_ids}
+    return {m: normalise(m) in available for m in expected}
 
 
 def main():
