@@ -56,4 +56,4 @@ jobs:
           SPACE_URL: ${{ vars.SPACE_URL }}
         run: python scripts/smoke_test.py
         continue-on-error: true
-        exit 1
+  
