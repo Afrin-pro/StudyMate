@@ -37,15 +37,15 @@ jobs:
           git remote add space https://Ai-WhizKid:${{ secrets.HF_TOKEN }}@huggingface.co/spaces/Ai-WhizKid/StudyMate
           git push space main --force
 
-  smoke:                        # confirm the live Space actually came up
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
+  smoke:
+     needs: [test, deploy]
+     if: github.ref == 'refs/heads/main' && vars.SPACE_URL != ''
+     runs-on: ubuntu-latest
+     steps:
       - uses: actions/checkout@v4
-      - name: Wait for rebuild, then probe
-        run: |
-          for i in $(seq 1 20); do
-            sleep 30
-            python scripts/smoke_test.py "${{ vars.SPACE_URL }}" && exit 0
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Wait for Space to come up
+        run: python scripts/smoke_test.py "${{ vars.SPACE_URL }}"
           done
           exit 1
