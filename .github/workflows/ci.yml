@@ -45,7 +45,7 @@ jobs:
           git commit -q -m "Deploy ${GITHUB_SHA::7} from GitHub"
           git push --force "https://Ai-WhizKid:${HF_TOKEN}@huggingface.co/spaces/Ai-WhizKid/StudyMate" hf-deploy:main
 
-  smoke:                                       # free Spaces rebuild/wake slowly, so this only warns
+  smoke:                                       # waits for the Space to rebuild, then checks it is really up
     needs: deploy
     if: github.ref == 'refs/heads/main' && vars.SPACE_URL != ''
     runs-on: ubuntu-latest
@@ -53,8 +53,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: Wait for Space and run smoke test
+      - name: Wait for the Space and run smoke test
         env:
           SPACE_URL: ${{ vars.SPACE_URL }}
-        run: python scripts/smoke_test.py
-        continue-on-error: true
+        run: python scripts/smoke_test.py "$SPACE_URL"
