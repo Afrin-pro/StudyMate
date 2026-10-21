@@ -2,7 +2,6 @@ from fastapi import FastAPI, Request, Form, UploadFile, File  # v2024-fix
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import uvicorn, json, os, hashlib, time, secrets, base64, io, re, html as _html
 from datetime import datetime
-from huggingface_hub import InferenceClient
 
 # ── PDF extraction (optional — graceful fallback if not installed) ─────────────
 try:
@@ -17,11 +16,12 @@ try:
 except ImportError:
     HAS_PIL = False
 
-TEXT_MODEL  = "Qwen/Qwen2.5-72B-Instruct"
+# Both models run on Groq's free tier (no paid HF Inference credits needed).
+TEXT_MODEL  = os.environ.get("TEXT_MODEL", "qwen/qwen3.8-27b")
+# Override without a code change: set VISION_MODEL in the HF Space variables.
+# (Groq replaced qwen3.6-27b with qwen3.8-27b; scripts/model_healthcheck.py caught it.)
 VISION_MODEL = os.environ.get("VISION_MODEL", "qwen/qwen3.8-27b")
-HF_TOKEN    = os.environ.get("HF_TOKEN")
 GROQ_KEY    = os.environ.get("GROQ_API_KEY")
-text_client = InferenceClient(model=TEXT_MODEL, token=HF_TOKEN)
 
 def strip_think(text):
     if not text:
@@ -70,6 +70,31 @@ def strip_reasoning_preamble(text):
             if recovered:
                 return recovered
     return text
+
+def call_groq(messages, model, max_tokens=2048):
+    """One place that talks to Groq for BOTH text and vision requests.
+
+    Asks Groq to keep chain-of-thought out of `content` (reasoning_format=hidden),
+    retries without it if the model rejects the parameter, then applies the
+    text-level safety nets. Rate-limit errors are re-raised for the caller.
+    """
+    from groq import Groq as GroqClient
+    client = GroqClient(api_key=GROQ_KEY)
+    kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=0.7)
+    try:
+        r = client.chat.completions.create(reasoning_format="hidden", **kwargs)
+    except Exception as e:
+        m = str(e).lower()
+        # Limit/size errors won't be fixed by dropping reasoning_format - surface them
+        # to the caller (which can shrink the document) instead of burning quota twice.
+        if any(x in m for x in ("429", "rate limit", "413", "too large", "tokens per minute")):
+            raise
+        r = client.chat.completions.create(**kwargs)
+    reply = strip_reasoning_preamble(strip_think(r.choices[0].message.content))
+    if not reply:
+        reply = ("⚠️ I started working on that but ran out of room before finishing "
+                 "my answer. Please try again with a shorter question.")
+    return reply
 
 def render_markdown_py(text: str) -> str:
     """Server-side mirror of the client's renderMarkdown() JS function.
@@ -189,6 +214,107 @@ def tok_from(request: Request):
     return tok if TOKEN_RE.match(tok) else ""
 
 # ── File processing ───────────────────────────────────────────────────────────
+MAX_PDF_PAGES   = int(os.environ.get("MAX_PDF_PAGES", "150"))
+# How much document text is sent to the model per request. Groq's free tier
+# limits tokens per minute, so this stays small; long PDFs are handled by
+# selecting the most relevant sections instead of sending everything.
+DOC_CHAR_BUDGET = int(os.environ.get("DOC_CHAR_BUDGET", "12000"))
+CHUNK_CHARS     = 1500
+
+_WORD_RE = re.compile(r"[a-z0-9]{3,}")
+_STOPWORDS = {
+    "the","and","for","are","but","not","you","all","can","her","was","one","our","out","get","has","him",
+    "how","its","who","why","what","when","where","which","this","that","with","from","they","them","then",
+    "than","have","been","were","will","would","could","should","about","into","there","their","these",
+    "those","explain","describe","give","tell","please","apply","using","use","example","examples",
+    "summarise","summarize","summary","overview","document","pdf","file","notes","topic","topics","main","points",
+}
+
+def _split_chunks(text, size=CHUNK_CHARS):
+    """Split into <=size-char chunks on paragraph boundaries (hard-splitting oversized ones)."""
+    chunks, cur = [], ""
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        while len(para) > size:                       # one giant paragraph / no blank lines
+            if cur:
+                chunks.append(cur); cur = ""
+            chunks.append(para[:size]); para = para[size:]
+        if cur and len(cur) + len(para) + 2 > size:
+            chunks.append(cur); cur = ""
+        cur = f"{cur}\n\n{para}" if cur else para
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+def _even_order(n):
+    """Indices 0..n-1 ordered so any prefix is spread evenly (1/2, 1/4, 3/4, 1/8, ...)."""
+    seen, order, level = set(), [], 1
+    while len(order) < n and level <= 64:
+        den = 2 ** level
+        for k in range(1, den, 2):
+            i = min(n - 1, int(k * n / den))
+            if i not in seen:
+                seen.add(i); order.append(i)
+        level += 1
+    order += [i for i in range(n) if i not in seen]
+    return order
+
+def select_relevant_text(text, question, budget=None):
+    """Fit a long document into the model's budget WITHOUT just chopping the end.
+
+    Short docs are returned unchanged. Long docs are split into chunks and
+    chunks are added in priority order until the budget is full:
+      1. the first chunk (title / intro),
+      2. chunks ranked by keyword relevance to the question (TF-IDF style,
+         computed locally - no extra API calls),
+      3. evenly spread chunks, so a generic request like "summarise this"
+         still covers the whole document.
+    Selected chunks are shown in original order. The result never exceeds
+    budget (plus a one-line note).
+    """
+    budget = budget or DOC_CHAR_BUDGET
+    if not text or len(text) <= budget:
+        return text
+    chunks = _split_chunks(text)
+    n = len(chunks)
+
+    terms = {w for w in _WORD_RE.findall((question or "").lower()) if w not in _STOPWORDS}
+    ranked = []
+    if terms:
+        import math
+        low = [c.lower() for c in chunks]
+        df = {t: sum(1 for c in low if t in c) for t in terms}
+        for i, c in enumerate(low):
+            sc = sum(c.count(t) * math.log(1 + n / df[t]) for t in terms if df[t])
+            if sc > 0:
+                ranked.append((sc, i))
+        ranked.sort(reverse=True)
+
+    priority = [0] + [i for _, i in ranked] + _even_order(n)
+    picked, used, seen = [], 0, set()
+    for i in priority:
+        if i in seen:
+            continue
+        seen.add(i)
+        if used + len(chunks[i]) + 2 <= budget:
+            picked.append(i); used += len(chunks[i]) + 2
+    if not picked:                                   # budget smaller than one chunk
+        return chunks[0][:budget]
+
+    order = sorted(picked)
+    parts, prev = [], None
+    for i in order:
+        if prev is not None and i != prev + 1:
+            parts.append("[...]")
+        parts.append(chunks[i])
+        prev = i
+    how = "most relevant to the question" if ranked else "spread across the document"
+    note = (f"[Long document: showing {len(order)} of {n} sections, {how}. "
+            "Ask about a specific topic or page to see other parts.]")
+    return note + "\n\n" + "\n\n".join(parts)
+
 def extract_pdf_text(data: bytes) -> str:
     if not HAS_PDF:
         return "[PDF uploaded — install pypdf to extract text]"
@@ -196,7 +322,7 @@ def extract_pdf_text(data: bytes) -> str:
         reader = pypdf.PdfReader(io.BytesIO(data))
         pages  = []
         for i, page in enumerate(reader.pages):
-            if i >= 20: break          # cap at 20 pages
+            if i >= MAX_PDF_PAGES: break
             text = page.extract_text() or ""
             if text.strip():
                 pages.append(f"--- Page {i+1} ---\n{text.strip()}")
@@ -289,7 +415,7 @@ def auth_page(error="", success="", tab="login"):
                     -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
           ✦ StudyMate</div>
         <div style="color:#6b7280;font-size:.88rem;margin-top:6px;">
-          Your intelligent study assistant · Qwen 72B</div>
+          Your intelligent study assistant · Powered by Qwen</div>
       </div>
       <div style="display:flex;border-bottom:2px solid #e9d5ff;margin-bottom:22px;">
         <button onclick="showTab('login')" id="tl"
@@ -853,6 +979,8 @@ async def api_chat(request: Request):
     history = (data or {}).get("chats", {}).get(sid, {}).get("history", [])
 
     # ── Build messages ──────────────────────────────────────────────────────
+    doc_budget = DOC_CHAR_BUDGET
+    full_text = None
     if file:
         mime  = file.get("mime", "")
         fname = file.get("name", "file")
@@ -864,15 +992,14 @@ async def api_chat(request: Request):
             b64, mime = resize_image_b64(b64, mime)
             file_info = {"type": "image", "name": fname, "mime": mime, "b64": b64}
         elif mime == "application/pdf":
-            text = extract_pdf_text(raw)
-            # Truncate to ~12000 chars to stay within context
-            if len(text) > 12000:
-                text = text[:12000] + "\n\n[...document truncated for length...]"
+            full_text = extract_pdf_text(raw)
+            text = select_relevant_text(full_text, msg, doc_budget)
             file_info = {"type": "pdf", "name": fname, "text": text}
         else:
             # Plain text / markdown
             try:
-                text = raw.decode("utf-8", errors="replace")[:12000]
+                full_text = raw.decode("utf-8", errors="replace")
+                text = select_relevant_text(full_text, msg, doc_budget)
             except Exception:
                 text = "[Could not decode file]"
             file_info = {"type": "text", "name": fname, "text": text}
@@ -897,50 +1024,27 @@ async def api_chat(request: Request):
     try:
         use_vision = file and file.get("mime","").startswith("image/")
         _route = "vision" if use_vision else "text"
-        if use_vision:
-            # Use Groq SDK — avoids Cloudflare blocks that urllib triggers
-            from groq import Groq as GroqClient
-            groq_client = GroqClient(api_key=GROQ_KEY)
-            vision_kwargs = dict(
-                model=VISION_MODEL,
-                messages=messages,
-                max_tokens=2048,  # was 1024 — too tight a budget for a reasoning
-                                  # model to finish its <think> block AND write
-                                  # a real answer, which is what was causing the
-                                  # chain-of-thought to leak (see strip_think).
-                temperature=0.7,
-            )
-            try:
-                # Ask Groq to keep the model's chain-of-thought server-side,
-                # in a separate `reasoning` field we simply never read, rather
-                # than mixed into the visible content at all. This is the
-                # real fix for qwen3.6-27b narrating its scratchpad as plain
-                # prose with no <think> tags for strip_think() to catch.
-                r = groq_client.chat.completions.create(reasoning_format="hidden", **vision_kwargs)
-            except Exception as e:
-                if "429" in str(e) or "rate limit" in str(e).lower():
-                    raise
-                # Deployment/model doesn't accept reasoning_format — retry
-                # without it and fall back to the text-based safety nets below.
-                r = groq_client.chat.completions.create(**vision_kwargs)
-            reply = strip_think(r.choices[0].message.content)
-            reply = strip_reasoning_preamble(reply)
-            if not reply:
-                # All the token budget went to reasoning and none to an
-                # actual answer (or the closing tag never arrived) — say so
-                # plainly instead of showing nothing or leaking raw CoT.
-                reply = ("⚠️ I started analysing that but ran out of room "
-                          "before finishing my answer. Please try again — "
-                          "a shorter question about the image usually helps.")
-        else:
-            r     = text_client.chat_completion(messages=messages, max_tokens=1024, temperature=0.7)
-            reply = strip_think(r.choices[0].message.content)
-            reply = strip_reasoning_preamble(reply)
+        try:
+            reply = call_groq(messages, VISION_MODEL if use_vision else TEXT_MODEL)
+        except Exception as first:
+            m = str(first).lower()
+            too_big = "413" in m or "too large" in m or "tokens per minute" in m
+            if too_big and full_text and doc_budget > 3000:
+                # Free-tier token limit hit: retry once with half as much document text.
+                metrics.inc("studymate_model_retries_total", route=_route, reason="shrink_document")
+                file_info["text"] = select_relevant_text(full_text, msg, doc_budget // 2)
+                messages = build_messages_with_file(history, msg, file_info)
+                reply = call_groq(messages, TEXT_MODEL)
+            else:
+                raise
     except Exception as e:
         err = str(e)
         if "429" in err or "rate limit" in err.lower():
             metrics.inc("studymate_model_errors_total", route=_route, kind="rate_limit")
-            reply = "⚠️ The image model is busy right now (rate limit). Please wait a moment and try again."
+            reply = "⚠️ The AI model is busy right now (free-tier rate limit). Please wait a minute and try again."
+        elif "413" in err or "too large" in err.lower():
+            metrics.inc("studymate_model_errors_total", route=_route, kind="too_large")
+            reply = "⚠️ That document is too large for the free model. Try a PDF with fewer pages, or ask about one section."
         else:
             metrics.inc("studymate_model_errors_total", route=_route, kind="other")
             reply = f"⚠️ Error: {e}"
