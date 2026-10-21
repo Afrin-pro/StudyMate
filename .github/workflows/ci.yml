@@ -32,28 +32,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: Push to HF Spaces
-        run: |
-          git remote add space https://Ai-WhizKid:${{ secrets.HF_TOKEN }}@huggingface.co/spaces/Ai-WhizKid/StudyMate
-          git push space main --force
-  smoke:
-    needs: [test, deploy]
-    if: github.ref == 'refs/heads/main' && vars.SPACE_URL != ''
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ vars.HF_USERNAME }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: git push --force "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE}" HEAD:main
+
+  smoke:                        # confirm the live Space actually came up
+    needs: deploy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - name: Wake HF Space
+      - name: Wait for rebuild, then probe
         run: |
-          curl -s -X POST \
-            "https://huggingface.co/api/spaces/Ai-WhizKid/StudyMate/restart" \
-            -H "Authorization: Bearer ${{ secrets.HF_TOKEN }}" || true
-          echo "Wake signal sent, waiting 60s for cold start..."
-          sleep 60
-      - name: Wait for Space to come up
-        env:
-          SPACE_URL: ${{ vars.SPACE_URL }}
-        run: python scripts/smoke_test.py
-        continue-on-error: true
-  
+          for i in $(seq 1 20); do
+            sleep 30
+            python scripts/smoke_test.py "${{ vars.SPACE_URL }}" && exit 0
+          done
+          exit 1

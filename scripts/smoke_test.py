@@ -1,44 +1,33 @@
-"""Post-deploy smoke test: python scripts/smoke_test.py https://<space>.hf.space"""
-import os
-import json, sys, time, urllib.request, urllib.error
+"""Post-deploy smoke test:  python scripts/smoke_test.py https://<space>.hf.space
+
+Verifies the deployed service is up, serving the login page, and exposing
+telemetry. Exit code != 0 fails the deploy pipeline.
+"""
+import json
+import sys
+import urllib.request
 
 
 def get(url):
-    try:
-        with urllib.request.urlopen(url, timeout=20) as r:
-            return r.status, r.read().decode()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
-    except Exception as e:
-        return 0, str(e)
+    with urllib.request.urlopen(url, timeout=20) as r:
+        return r.status, r.read().decode()
 
 
-def run(base, retries=15, wait=30):
+def run(base):
     base = base.rstrip("/")
-
-    for attempt in range(1, retries + 1):
-        status, body = get(f"{base}/health")
-        if status == 200:
-            break
-        print(f"[{attempt}/{retries}] /health returned {status}, waiting {wait}s...")
-        if attempt == retries:
-            print("SMOKE TEST FAILED — space never came up")
-            return 1
-        time.sleep(wait)
-
     failures = []
 
     status, body = get(f"{base}/health")
     if status != 200 or json.loads(body).get("status") != "ok":
-        failures.append(f"/health not ok (status={status})")
+        failures.append("/health not ok")
 
     status, body = get(f"{base}/")
     if status != 200 or "StudyMate" not in body:
-        failures.append(f"login page not served (status={status})")
+        failures.append("login page not served")
 
     status, body = get(f"{base}/metrics")
     if status != 200 or "studymate_uptime_seconds" not in body:
-        failures.append(f"/metrics not exposing telemetry (status={status})")
+        failures.append("/metrics not exposing telemetry")
 
     for f in failures:
         print("FAIL:", f)
@@ -47,11 +36,6 @@ def run(base, retries=15, wait=30):
 
 
 if __name__ == "__main__":
-    url = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else os.environ.get("SPACE_URL", "")
-    )
-    if not url:
-        sys.exit("error: pass the Space URL as an argument or set SPACE_URL env var")
-    sys.exit(run(url))
+    if len(sys.argv) != 2:
+        sys.exit("usage: smoke_test.py <base-url>")
+    sys.exit(run(sys.argv[1]))

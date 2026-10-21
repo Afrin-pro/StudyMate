@@ -17,7 +17,7 @@ class TestTextChat:
     def test_happy_path(self, client, user, text_model):
         r = chat(client, user[1], message="What is entropy?")
         assert r.status_code == 200
-        assert r.json() == {"reply": "Hello from the text model", "sid": "s1", "refresh_sidebar": True}
+        assert r.json() == {"reply": "Hello from the model", "sid": "s1", "refresh_sidebar": True}
 
     def test_empty_message_rejected(self, client, user, text_model):
         assert chat(client, user[1], message="   ").json() == {"error": "empty"}
@@ -28,7 +28,13 @@ class TestTextChat:
         r = chat(client, user[1], message="second")
         assert r.json()["refresh_sidebar"] is False
         sent = text_model.calls[-1]["messages"]
-        assert [m["content"] for m in sent if m["role"] != "system"] == ["first", "Hello from the text model", "second"]
+        assert [m["content"] for m in sent if m["role"] != "system"] == ["first", "Hello from the model", "second"]
+
+    def test_text_uses_groq_text_model_with_hidden_reasoning(self, client, user, text_model):
+        chat(client, user[1], message="hi")
+        call = text_model.calls[0]
+        assert call["model"] == app.TEXT_MODEL and call["reasoning_format"] == "hidden"
+        assert isinstance(call["messages"][-1]["content"], str)
 
     def test_system_prompt_always_first(self, client, user, text_model):
         chat(client, user[1], message="hi")
@@ -68,6 +74,15 @@ class TestTextModelFailures:
         text_model.error = RuntimeError("429 Too Many Requests")
         assert "busy" in chat(client, user[1], message="q").json()["reply"]
 
+    def test_oversized_document_gets_friendly_message(self, client, user, text_model):
+        text_model.error = RuntimeError("Error code: 413 - Request too large for model")
+        r = chat(client, user[1], message="q")
+        assert "too large" in r.json()["reply"] and "Error code" not in r.json()["reply"]
+
+    def test_payment_required_is_not_swallowed_silently(self, client, user, text_model):
+        text_model.error = RuntimeError("402 Payment Required")
+        assert "402" in chat(client, user[1], message="q").json()["reply"]
+
     def test_generic_error_surfaced_not_500(self, client, user, text_model):
         text_model.error = RuntimeError("provider exploded")
         r = chat(client, user[1], message="q")
@@ -91,11 +106,39 @@ class TestPdfUpload:
         chat(client, user[1], message="", file={"name": "n.pdf", "mime": "application/pdf", "b64": b64(make_pdf_bytes())})
         assert "summarise" in text_model.calls[0]["messages"][-1]["content"].lower()
 
-    def test_long_pdf_truncated_to_context_budget(self, client, user, text_model):
-        pdf = make_pdf_bytes(["word " * 400] * 15)
-        chat(client, user[1], message="q", file={"name": "big.pdf", "mime": "application/pdf", "b64": b64(pdf)})
+    def test_long_pdf_relevant_page_reaches_model(self, client, user, text_model):
+        pages = [f"Filler page {i} about operating systems. " * 15 for i in range(80)]
+        pages[70] = "Normalization removes redundancy using 1NF 2NF 3NF in a DBMS. " * 8
+        r = chat(client, user[1], message="explain normalization",
+                 file={"name": "big.pdf", "mime": "application/pdf", "b64": b64(make_pdf_bytes(pages))})
         prompt = text_model.calls[0]["messages"][-1]["content"]
-        assert "document truncated" in prompt
+        assert "Normalization removes redundancy" in prompt      # page 71 (old code kept only ~first 12k chars)
+        assert "Long document:" in prompt
+        assert len(prompt) < app.DOC_CHAR_BUDGET + 2000
+        assert "⚠️" not in r.json()["reply"]
+
+    def test_too_large_request_retries_once_with_smaller_document(self, client, user, text_model):
+        pages = [f"Filler page {i} about operating systems. " * 15 for i in range(80)]
+        text_model.max_chars = 9000                      # full budget (12k) exceeds this, half (6k) fits
+        r = chat(client, user[1], message="explain filler",
+                 file={"name": "big.pdf", "mime": "application/pdf", "b64": b64(make_pdf_bytes(pages))})
+        assert r.json()["reply"] == "Hello from the model"
+        sizes = [len(str(c["messages"])) for c in text_model.calls]
+        assert sizes[0] > 9000 and sizes[-1] <= 9000
+        metrics_text = client.get("/metrics").text
+        assert 'studymate_model_retries_total{reason="shrink_document",route="text"} 1' in metrics_text
+
+    def test_size_error_not_retried_pointlessly_inside_call_groq(self, client, user, text_model):
+        text_model.max_chars = 50                        # impossible to satisfy
+        chat(client, user[1], message="hi " * 100)
+        assert len(text_model.calls) == 1                # no duplicate identical request
+
+    def test_still_too_large_after_retry_shows_friendly_message(self, client, user, text_model):
+        text_model.max_chars = 100
+        pages = [f"Filler page {i}. " * 40 for i in range(40)]
+        r = chat(client, user[1], message="q",
+                 file={"name": "big.pdf", "mime": "application/pdf", "b64": b64(make_pdf_bytes(pages))})
+        assert "too large" in r.json()["reply"]
 
     def test_corrupt_pdf_handled_gracefully(self, client, user, text_model):
         r = chat(client, user[1], message="q", file={"name": "bad.pdf", "mime": "application/pdf", "b64": b64(b"junk")})
@@ -115,10 +158,11 @@ class TestImageUpload:
     def img(self, size=(40, 30)):
         return {"name": "shot.png", "mime": "image/png", "b64": make_png_b64(size)}
 
-    def test_routes_to_vision_not_text(self, client, user, text_model, vision_model):
+    def test_image_sent_as_multimodal_content(self, client, user, vision_model):
         r = chat(client, user[1], message="about this", file=self.img())
-        assert r.json()["reply"] == "Hello from the vision model"
-        assert text_model.calls == [] and len(vision_model.calls) == 1
+        assert r.json()["reply"] == "Hello from the model"
+        assert len(vision_model.calls) == 1
+        assert isinstance(vision_model.calls[0]["messages"][-1]["content"], list)
 
     def test_requests_hidden_reasoning(self, client, user, vision_model):
         chat(client, user[1], message="x", file=self.img())
@@ -128,7 +172,7 @@ class TestImageUpload:
     def test_falls_back_when_reasoning_format_rejected(self, client, user, vision_model):
         vision_model.reject_reasoning_format = True
         r = chat(client, user[1], message="x", file=self.img())
-        assert r.json()["reply"] == "Hello from the vision model"
+        assert r.json()["reply"] == "Hello from the model"
         assert len(vision_model.calls) == 2 and "reasoning_format" not in vision_model.calls[1]
 
     def test_rate_limit_not_retried_and_friendly(self, client, user, vision_model):

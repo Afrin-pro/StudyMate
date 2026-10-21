@@ -48,9 +48,14 @@ class TestPdf:
         out = app.extract_pdf_text(make_pdf_bytes(["Entropy always increases."]))
         assert "Entropy always increases." in out and "--- Page 1 ---" in out
 
-    def test_caps_at_20_pages(self):
-        out = app.extract_pdf_text(make_pdf_bytes([f"page text {i}" for i in range(25)]))
-        assert "--- Page 20 ---" in out and "--- Page 21 ---" not in out
+    def test_long_pdf_reads_all_pages_up_to_cap(self):
+        out = app.extract_pdf_text(make_pdf_bytes([f"page text {i}" for i in range(60)]))
+        assert "--- Page 60 ---" in out      # old limit was 20 pages
+
+    def test_page_cap_is_configurable(self, monkeypatch):
+        monkeypatch.setattr(app, "MAX_PDF_PAGES", 5)
+        out = app.extract_pdf_text(make_pdf_bytes([f"page text {i}" for i in range(9)]))
+        assert "--- Page 5 ---" in out and "--- Page 6 ---" not in out
 
     def test_corrupt_pdf_does_not_raise(self):
         assert app.extract_pdf_text(b"not a pdf").startswith("[Could not read PDF")
@@ -113,3 +118,53 @@ class TestBuildMessages:
     def test_image_without_question_has_only_image_part(self):
         msgs = app.build_messages_with_file([], "", {"type": "image", "name": "i.png", "mime": "image/png", "b64": "AAA"})
         assert [p["type"] for p in msgs[-1]["content"]] == ["image_url"]
+
+
+class TestSelectRelevantText:
+    @staticmethod
+    def doc(pages=120, hit=90):
+        ps = [f"Chapter {i}. Generic filler about operating systems and networks. " * 12 for i in range(1, pages + 1)]
+        ps[hit - 1] = "Database normalization: 1NF 2NF 3NF BCNF remove redundancy in a DBMS. " * 6
+        return "\n\n".join(f"--- Page {i+1} ---\n{p}" for i, p in enumerate(ps))
+
+    def test_short_document_returned_unchanged(self):
+        assert app.select_relevant_text("small doc", "q", 12000) == "small doc"
+
+    def test_empty_and_none(self):
+        assert app.select_relevant_text("", "q") == "" and app.select_relevant_text(None, "q") is None
+
+    def test_finds_relevant_section_deep_in_long_document(self):
+        out = app.select_relevant_text(self.doc(), "explain normalization in dbms", 12000)
+        assert "normalization" in out          # page 90 would be lost by head-truncation
+        assert "--- Page 1 ---" in out         # intro always kept
+
+    def test_output_respects_budget(self):
+        for q in ("explain normalization", "summarise this", ""):
+            out = app.select_relevant_text(self.doc(), q, 12000)
+            assert len(out) <= 12000 + 400     # budget + the short explanatory note
+
+    def test_generic_request_spreads_across_whole_document(self):
+        import re
+        out = app.select_relevant_text(self.doc(), "summarise this", 12000)
+        pages = sorted(int(p) for p in re.findall(r"--- Page (\d+) ---", out))
+        assert pages[0] <= 5 and pages[-1] >= 100 and "spread across the document" in out
+
+    def test_original_order_preserved(self):
+        import re
+        out = app.select_relevant_text(self.doc(), "normalization", 12000)
+        pages = [int(p) for p in re.findall(r"--- Page (\d+) ---", out)]
+        assert pages == sorted(pages)
+
+    def test_note_tells_model_the_document_is_partial(self):
+        assert app.select_relevant_text(self.doc(), "normalization", 12000).startswith("[Long document:")
+
+    def test_stopwords_do_not_drive_selection(self):
+        out = app.select_relevant_text(self.doc(), "please explain how to use this", 12000)
+        assert "spread across the document" in out     # no real keywords -> even spread
+
+    def test_single_giant_paragraph_without_blank_lines(self):
+        out = app.select_relevant_text("word " * 20000, "q", 6000)
+        assert len(out) <= 6000 + 400
+
+    def test_small_budget_still_returns_something(self):
+        assert app.select_relevant_text(self.doc(), "normalization", 100)

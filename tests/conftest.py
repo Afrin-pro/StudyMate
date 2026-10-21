@@ -25,21 +25,12 @@ class FakeCompletion:
     def __init__(self, content): self.choices = [_Choice(content)]
 
 
-class FakeTextClient:
-    """Stands in for huggingface_hub.InferenceClient."""
-    def __init__(self, reply="Hello from the text model", error=None):
-        self.reply, self.error, self.calls = reply, error, []
-    def chat_completion(self, messages, **kw):
-        self.calls.append({"messages": messages, **kw})
-        if self.error: raise self.error
-        return FakeCompletion(self.reply)
-
-
 class FakeGroq:
     """Stands in for groq.Groq. Configure class attributes per test."""
-    reply = "Hello from the vision model"
+    reply = "Hello from the model"
     error = None
     reject_reasoning_format = False
+    max_chars = None          # simulate Groq's per-request token limit (413)
     calls = []
 
     def __init__(self, api_key=None):
@@ -51,12 +42,15 @@ class FakeGroq:
         if FakeGroq.reject_reasoning_format and "reasoning_format" in kw:
             raise ValueError("400 unknown parameter: reasoning_format")
         if FakeGroq.error: raise FakeGroq.error
+        if FakeGroq.max_chars and len(str(kw.get("messages"))) > FakeGroq.max_chars:
+            raise RuntimeError("Error code: 413 - Request too large for model (tokens per minute)")
         return FakeCompletion(FakeGroq.reply)
 
     @classmethod
     def reset(cls):
         cls.reply, cls.error, cls.reject_reasoning_format, cls.calls = (
-            "Hello from the vision model", None, False, [])
+            "Hello from the model", None, False, [])
+        cls.max_chars = None
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -73,9 +67,12 @@ def isolated_storage(tmp_path, monkeypatch):
 
 @pytest.fixture
 def text_model(monkeypatch):
-    fake = FakeTextClient()
-    monkeypatch.setattr(studymate, "text_client", fake)
-    return fake
+    """Text and vision both run on Groq now, so both fixtures share one fake."""
+    import groq
+    FakeGroq.reset()
+    monkeypatch.setattr(groq, "Groq", FakeGroq)
+    yield FakeGroq
+    FakeGroq.reset()
 
 
 @pytest.fixture
