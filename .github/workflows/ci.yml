@@ -25,19 +25,19 @@ jobs:
             coverage.xml
             htmlcov/
 
-  deploy:                       # only on main, only if tests passed
+  deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
       - name: Push to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_USERNAME: ${{ vars.HF_USERNAME }}
-          HF_SPACE: ${{ vars.HF_SPACE }}
-        run: git push --force "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE}" HEAD:main
+        run: |
+          git push --force "https://Ai-WhizKid:${HF_TOKEN}@huggingface.co/spaces/Ai-WhizKid/StudyMate" HEAD:main
 
   smoke:                        # confirm the live Space actually came up
     needs: deploy
