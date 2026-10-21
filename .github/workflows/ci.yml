@@ -31,12 +31,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - name: Push to Hugging Face Space
+      - name: Push a clean snapshot to the Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force "https://Ai-WhizKid:${HF_TOKEN}@huggingface.co/spaces/Ai-WhizKid/StudyMate" HEAD:main
+          # Deploy the current files as ONE fresh commit. This keeps old history
+          # (and any binary file ever committed, e.g. a .zip) out of the Space,
+          # which rejects binaries that aren't tracked with Git LFS.
+          git config user.name  "github-actions"
+          git config user.email "actions@github.com"
+          git checkout --orphan hf-deploy
+          git rm -r -q --cached --ignore-unmatch '*.zip'
+          git commit -q -m "Deploy ${GITHUB_SHA::7} from GitHub"
+          git push --force "https://Ai-WhizKid:${HF_TOKEN}@huggingface.co/spaces/Ai-WhizKid/StudyMate" hf-deploy:main
 
   smoke:                                       # free Spaces rebuild/wake slowly, so this only warns
     needs: deploy
