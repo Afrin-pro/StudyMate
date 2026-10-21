@@ -1,3 +1,12 @@
+---
+license: mit
+title: StudyMate
+sdk: docker
+emoji: 📚
+colorFrom: purple
+colorTo: blue
+short_description: AI study assistant — chat, image & PDF analysis
+---
 # StudyMate 📚
 
 ![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)
